@@ -1,0 +1,18 @@
+[programs.devnet]
+staking = "C6wGW14B9SUBsG1xVENNvtCeyBgBzbfzbaVaLTtCEuwc"
+
+[programs.mainnet]
+staking = "C6wGW14B9SUBsG1xVENNvtCeyBgBzbfzbaVaLTtCEuwc"
+
+[registry]
+url = "https://anchor.projectserum.com"
+
+[provider]
+cluster = "devnet"
+wallet = "~/.config/solana/id.json"
+
+[workspace]
+members = [
+	"staking",
+	"token_staking"
+]
