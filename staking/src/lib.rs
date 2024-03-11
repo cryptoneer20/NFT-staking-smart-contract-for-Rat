@@ -1,18 +1,20 @@
-use anchor_lang::{error, prelude::*};
+use anchor_lang::{
+    error,
+    prelude::*,
+    solana_program::{program::invoke, system_instruction},
+};
 use anchor_spl::token::{self, Mint, SetAuthority, Token, TokenAccount, Transfer};
 use mpl_token_metadata::{self, accounts::*};
 use solana_program::entrypoint::ProgramResult;
 use spl_token::instruction::AuthorityType;
 
-declare_id!("GJwBYCcnwCkzkLP5NKiC4z9HDj88cLuRAE4JUw6gKbjs");
+declare_id!("ratnSpwdsporDA6rBDCnZzi5BvuoGhQy6hqzeHc66QE");
 
 #[program]
 pub mod staking {
     use super::*;
 
-    pub fn init_pool(
-        ctx: Context<InitPool>,
-    ) -> ProgramResult {
+    pub fn init_pool(ctx: Context<InitPool>) -> ProgramResult {
         let pool = &mut ctx.accounts.pool;
         pool.owner = ctx.accounts.owner.key();
         pool.rand = *ctx.accounts.rand.key;
@@ -21,10 +23,7 @@ pub mod staking {
         Ok(())
     }
 
-    pub fn transfer_ownership(
-        ctx: Context<UpdatePoolData>,
-        _new_owner: Pubkey,
-    ) -> ProgramResult {
+    pub fn transfer_ownership(ctx: Context<UpdatePoolData>, _new_owner: Pubkey) -> ProgramResult {
         let pool = &mut ctx.accounts.pool;
         pool.owner = _new_owner;
         Ok(())
@@ -32,21 +31,23 @@ pub mod staking {
 
     pub fn update_pool_properties(
         ctx: Context<UpdatePoolData>,
-        _reward_period:u64,
-        _reward_amount:u64,
-        _reward_amount_for_lock:u64,
-        _lock_duration:u64,
+        _reward_period: u64,
+        _reward_amount: u64,
+        _reward_amount_for_lock: u64,
+        _lock_duration: u64,
         _collection: Pubkey,
+        _unstake_fee_amount: u64,
     ) -> ProgramResult {
         let pool = &mut ctx.accounts.pool;
-        if _reward_period == 0{
-            return Err(error!(PoolError::InvalidRewardPeriod).into())
+        if _reward_period == 0 {
+            return Err(error!(PoolError::InvalidRewardPeriod).into());
         }
         pool.reward_period = _reward_period;
         pool.reward_amount = _reward_amount;
         pool.reward_amount_for_lock = _reward_amount_for_lock;
         pool.lock_duration = _lock_duration;
         pool.collection = _collection;
+        pool.unstake_fee_amount = _unstake_fee_amount;
         Ok(())
     }
 
@@ -136,8 +137,23 @@ pub mod staking {
         let pool_signer_seeds = &[temp_pool.rand.as_ref(), &[ctx.bumps.pool]];
         let signer = &[&pool_signer_seeds[..]];
 
-        if staking_data.lock_status==1 && staking_data.lock_time+pool.lock_duration > clock{
+        if staking_data.lock_status == 1 && staking_data.lock_time + pool.lock_duration > clock {
             return Err(error!(PoolError::InvalidUnstakeTime).into());
+        }
+
+        if pool.unstake_fee_amount > 0 {
+            invoke(
+                &system_instruction::transfer(
+                    &ctx.accounts.staker.key(),
+                    ctx.accounts.pool_owner.key,
+                    pool.unstake_fee_amount,
+                ),
+                &[
+                    ctx.accounts.staker.to_account_info().clone(),
+                    ctx.accounts.pool_owner.clone(),
+                    ctx.accounts.system_program.to_account_info().clone(),
+                ],
+            )?;
         }
 
         let amount = get_reward_amount(pool, staking_data, clock);
@@ -168,8 +184,8 @@ pub mod staking {
         )?;
         staking_data.is_staked = false;
         staking_data.staker = Pubkey::default();
-        if staking_data.lock_status==1{
-            staking_data.lock_status=2;
+        if staking_data.lock_status == 1 {
+            staking_data.lock_status = 2;
         }
         pool.total_number -= 1;
         Ok(())
@@ -201,21 +217,31 @@ pub mod staking {
 }
 
 pub fn get_reward_amount(pool: &Pool, staking_data: &StakingData, current_time: u64) -> u64 {
-    if staking_data.lock_status==0 || staking_data.lock_status==2{
+    if staking_data.lock_status == 0 || staking_data.lock_status == 2 {
         return pool.reward_amount * (current_time - staking_data.claim_time) / pool.reward_period;
     }
-    if staking_data.claim_time < staking_data.lock_time{
-        if staking_data.lock_time+pool.lock_duration > current_time {
-            return (pool.reward_amount * (staking_data.lock_time - staking_data.claim_time) + pool.reward_amount_for_lock * (current_time-staking_data.lock_time)) / pool.reward_period;
-        }else{
-            return (pool.reward_amount * (current_time - staking_data.claim_time - pool.lock_duration) + pool.reward_amount_for_lock * pool.lock_duration) / pool.reward_period;
+    if staking_data.claim_time < staking_data.lock_time {
+        if staking_data.lock_time + pool.lock_duration > current_time {
+            return (pool.reward_amount * (staking_data.lock_time - staking_data.claim_time)
+                + pool.reward_amount_for_lock * (current_time - staking_data.lock_time))
+                / pool.reward_period;
+        } else {
+            return (pool.reward_amount
+                * (current_time - staking_data.claim_time - pool.lock_duration)
+                + pool.reward_amount_for_lock * pool.lock_duration)
+                / pool.reward_period;
         }
     }
     if staking_data.claim_time < staking_data.lock_time + pool.lock_duration {
-        if staking_data.lock_time+pool.lock_duration > current_time {
-            return pool.reward_amount_for_lock * (current_time - staking_data.claim_time) / pool.reward_period;
-        }else{
-            return (pool.reward_amount_for_lock * (staking_data.lock_time + pool.lock_duration - staking_data.claim_time) + pool.reward_amount * (current_time - staking_data.lock_time - pool.lock_duration)) / pool.reward_period;
+        if staking_data.lock_time + pool.lock_duration > current_time {
+            return pool.reward_amount_for_lock * (current_time - staking_data.claim_time)
+                / pool.reward_period;
+        } else {
+            return (pool.reward_amount_for_lock
+                * (staking_data.lock_time + pool.lock_duration - staking_data.claim_time)
+                + pool.reward_amount
+                    * (current_time - staking_data.lock_time - pool.lock_duration))
+                / pool.reward_period;
         }
     }
     return pool.reward_amount * (current_time - staking_data.claim_time) / pool.reward_period;
@@ -268,6 +294,12 @@ pub struct UnstakeNft<'info> {
     token_to: Account<'info, TokenAccount>,
 
     clock: Sysvar<'info, Clock>,
+
+    #[account(mut, address=pool.owner)]
+    /// CHECK: Pool owner Address
+    pool_owner: AccountInfo<'info>,
+
+    system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
@@ -384,7 +416,7 @@ pub struct InitPool<'info> {
     system_program: Program<'info, System>,
 }
 
-pub const MAX_POOL_SIZE: usize = 32 + 32 + 32 + 32 + 8 + 8 + 8 + 32 + 8 + 8 + 40;
+pub const MAX_POOL_SIZE: usize = 32 + 32 + 32 + 32 + 8 + 8 + 8 + 32 + 8 + 8 + 8 + 32;
 pub const STAKING_DATA_SIZE: usize = 32 + 32 + 32 + 1 + 32 + 8 + 8 + 8 + 1 + 40;
 
 #[account]
@@ -400,6 +432,7 @@ pub struct Pool {
     pub collection: Pubkey,
     pub total_number: u64,
     pub locked_number: u64,
+    pub unstake_fee_amount: u64,
 }
 
 #[account]
