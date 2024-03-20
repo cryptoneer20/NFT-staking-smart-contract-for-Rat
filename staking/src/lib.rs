@@ -1,12 +1,18 @@
 use anchor_lang::{
     error,
     prelude::*,
-    solana_program::{program::invoke, system_instruction},
+    solana_program::{
+        program::{invoke, invoke_signed},
+        system_instruction,
+    },
 };
-use anchor_spl::token::{self, Mint, SetAuthority, Token, TokenAccount, Transfer};
-use mpl_token_metadata::{self, accounts::*};
+use anchor_spl::{
+    associated_token::AssociatedToken,
+    token::{self, Mint, /*SetAuthority,*/ Token, TokenAccount, Transfer},
+};
+use mpl_token_metadata::{self, accounts::*, instructions, types};
 use solana_program::entrypoint::ProgramResult;
-use spl_token::instruction::AuthorityType;
+// use spl_token::instruction::AuthorityType;
 
 declare_id!("ratnSpwdsporDA6rBDCnZzi5BvuoGhQy6hqzeHc66QE");
 
@@ -99,18 +105,76 @@ pub mod staking {
     }
 
     pub fn stake_nft(ctx: Context<StakeNft>) -> ProgramResult {
+        let pool_key = ctx.accounts.pool.key();
+        let pool_account = ctx.accounts.pool.to_account_info().clone();
         let pool = &mut ctx.accounts.pool;
         let staking_data = &mut ctx.accounts.staking_data;
         let clock = (&ctx.accounts.clock).unix_timestamp as u64;
-        let cpi_ctx = CpiContext::new(
-            ctx.accounts.token_program.to_account_info().clone(),
-            SetAuthority {
-                current_authority: ctx.accounts.staker.to_account_info().clone(),
-                account_or_mint: ctx.accounts.nft_account.to_account_info().clone(),
-            },
-        );
-        token::set_authority(cpi_ctx, AuthorityType::AccountOwner, Some(pool.key()))?;
-        staking_data.nft_account = ctx.accounts.nft_account.key();
+        // let cpi_ctx = CpiContext::new(
+        //     ctx.accounts.token_program.to_account_info().clone(),
+        //     SetAuthority {
+        //         current_authority: ctx.accounts.staker.to_account_info().clone(),
+        //         account_or_mint: ctx.accounts.nft_account.to_account_info().clone(),
+        //     },
+        // );
+        // token::set_authority(cpi_ctx, AuthorityType::AccountOwner, Some(pool.key()))?;
+        // let cpi_ctx = CpiContext::new(
+        //     ctx.accounts.token_program.to_account_info().clone(),
+        //     Transfer {
+        //         from: ctx.accounts.nft_account.to_account_info().clone(),
+        //         to: ctx.accounts.to_nft_account.to_account_info().clone(),
+        //         authority: ctx.accounts.staker.to_account_info().clone()
+        //     }
+        // );
+        // token::transfer(cpi_ctx, 1)?;
+
+        invoke(
+            &instructions::Transfer {
+                token: ctx.accounts.nft_account.key(),
+                token_owner: ctx.accounts.staker.key(),
+                destination_token: ctx.accounts.to_nft_account.key(),
+                destination_owner: pool_key,
+                mint: ctx.accounts.nft_mint.key(),
+                metadata: *ctx.accounts.metadata.key,
+                edition: Option::Some(*ctx.accounts.edition.key),
+                token_record: Option::Some(*ctx.accounts.owner_token_record.key),
+                destination_token_record: Option::Some(*ctx.accounts.destination_token_record.key),
+                authority: ctx.accounts.staker.key(),
+                payer: ctx.accounts.staker.key(),
+                system_program: ctx.accounts.system_program.key(),
+                sysvar_instructions: *ctx.accounts.sysvar_rent.key,
+                spl_token_program: ctx.accounts.token_program.key(),
+                spl_ata_program: ctx.accounts.ata_program.key(),
+                authorization_rules_program: Option::Some(*ctx.accounts.authorization_rules_program.key),
+                authorization_rules: Option::Some(*ctx.accounts.authorization_rules.key),
+            }.instruction(instructions::TransferInstructionArgs {
+                transfer_args: types::TransferArgs::V1 {
+                    amount: 1,
+                    authorization_data: Option::None,
+                },
+            }),
+            &[
+                ctx.accounts.metadata_program.to_account_info().clone(),
+                ctx.accounts.nft_account.to_account_info().clone(),
+                ctx.accounts.staker.to_account_info().clone(),
+                ctx.accounts.to_nft_account.to_account_info().clone(),
+                pool_account,
+                ctx.accounts.nft_mint.to_account_info().clone(),
+                ctx.accounts.metadata.clone(),
+                ctx.accounts.edition.clone(),
+                ctx.accounts.owner_token_record.clone(),
+                ctx.accounts.destination_token_record.clone(),
+                ctx.accounts.metadata_program.clone(),
+                ctx.accounts.system_program.to_account_info().clone(),
+                ctx.accounts.sysvar_rent.clone(),
+                ctx.accounts.token_program.to_account_info(),
+                ctx.accounts.ata_program.to_account_info().clone(),
+                ctx.accounts.authorization_rules_program.clone(),
+                ctx.accounts.authorization_rules.clone()
+            ],
+        )?;
+
+        staking_data.nft_account = ctx.accounts.to_nft_account.key();
         staking_data.staker = ctx.accounts.staker.key();
         staking_data.stake_time = clock;
         staking_data.claim_time = clock;
@@ -130,6 +194,8 @@ pub mod staking {
     }
 
     pub fn unstake_nft(ctx: Context<UnstakeNft>) -> ProgramResult {
+        let pool_key = ctx.accounts.pool.key();
+        let pool_account = ctx.accounts.pool.to_account_info().clone();
         let pool = &mut ctx.accounts.pool;
         let temp_pool = pool.clone();
         let staking_data = &mut ctx.accounts.staking_data;
@@ -169,19 +235,77 @@ pub mod staking {
         token::transfer(cpi_ctx_token, amount)?;
         staking_data.claim_time = clock;
 
-        let cpi_ctx = CpiContext::new_with_signer(
-            ctx.accounts.token_program.to_account_info().clone(),
-            SetAuthority {
-                current_authority: temp_pool.to_account_info().clone(),
-                account_or_mint: ctx.accounts.nft_account.to_account_info().clone(),
-            },
+        // let cpi_ctx = CpiContext::new_with_signer(
+        //     ctx.accounts.token_program.to_account_info().clone(),
+        //     SetAuthority {
+        //         current_authority: temp_pool.to_account_info().clone(),
+        //         account_or_mint: ctx.accounts.nft_account.to_account_info().clone(),
+        //     },
+        //     signer,
+        // );
+        // token::set_authority(
+        //     cpi_ctx,
+        //     AuthorityType::AccountOwner,
+        //     Some(staking_data.staker),
+        // )?;
+        // let cpi_ctx = CpiContext::new_with_signer(
+        //     ctx.accounts.token_program.to_account_info().clone(),
+        //     Transfer {
+        //         from: ctx.accounts.nft_account.to_account_info().clone(),
+        //         to: ctx.accounts.to_nft_account.to_account_info().clone(),
+        //         authority: pool.to_account_info().clone(),
+        //     },
+        //     signer,
+        // );
+        // token::transfer(cpi_ctx, 1)?;
+
+        invoke_signed(
+            &instructions::Transfer {
+                token: ctx.accounts.nft_account.key(),
+                token_owner: pool_key,
+                destination_token: ctx.accounts.to_nft_account.key(),
+                destination_owner: ctx.accounts.staker.key(),
+                mint: ctx.accounts.nft_mint.key(),
+                metadata: *ctx.accounts.metadata.key,
+                edition: Option::Some(*ctx.accounts.edition.key),
+                token_record: Option::Some(*ctx.accounts.owner_token_record.key),
+                destination_token_record: Option::Some(*ctx.accounts.destination_token_record.key),
+                authority: pool_key,
+                payer: ctx.accounts.staker.key(),
+                system_program: ctx.accounts.system_program.key(),
+                sysvar_instructions: *ctx.accounts.sysvar_rent.key,
+                spl_token_program: ctx.accounts.token_program.key(),
+                spl_ata_program: ctx.accounts.ata_program.key(),
+                authorization_rules_program: Option::Some(*ctx.accounts.authorization_rules_program.key),
+                authorization_rules: Option::Some(*ctx.accounts.authorization_rules.key),
+            }.instruction(instructions::TransferInstructionArgs {
+                transfer_args: types::TransferArgs::V1 {
+                    amount: 1,
+                    authorization_data: Option::None,
+                },
+            }),
+            &[
+                ctx.accounts.metadata_program.to_account_info().clone(),
+                ctx.accounts.nft_account.to_account_info().clone(),
+                ctx.accounts.staker.to_account_info().clone(),
+                ctx.accounts.to_nft_account.to_account_info().clone(),
+                pool_account,
+                ctx.accounts.nft_mint.to_account_info().clone(),
+                ctx.accounts.metadata.clone(),
+                ctx.accounts.edition.clone(),
+                ctx.accounts.owner_token_record.clone(),
+                ctx.accounts.destination_token_record.clone(),
+                ctx.accounts.metadata_program.clone(),
+                ctx.accounts.system_program.to_account_info().clone(),
+                ctx.accounts.sysvar_rent.clone(),
+                ctx.accounts.token_program.to_account_info(),
+                ctx.accounts.ata_program.to_account_info().clone(),
+                ctx.accounts.authorization_rules_program.clone(),
+                ctx.accounts.authorization_rules.clone()
+            ],
             signer,
-        );
-        token::set_authority(
-            cpi_ctx,
-            AuthorityType::AccountOwner,
-            Some(staking_data.staker),
         )?;
+
         staking_data.is_staked = false;
         staking_data.staker = Pubkey::default();
         if staking_data.lock_status == 1 {
@@ -278,11 +402,14 @@ pub struct UnstakeNft<'info> {
     #[account(mut, seeds=[pool.rand.as_ref()], bump)]
     pool: Account<'info, Pool>,
 
-    #[account(mut, has_one=staker, has_one=pool, constraint=staking_data.is_staked==true)]
+    #[account(mut, has_one=staker, has_one=pool, has_one=nft_account, constraint=staking_data.is_staked==true)]
     staking_data: Account<'info, StakingData>,
 
-    #[account(mut, constraint=nft_account.mint==staking_data.nft_mint)]
+    #[account(mut)]
     nft_account: Account<'info, TokenAccount>,
+
+    #[account(mut, constraint=to_nft_account.mint==staking_data.nft_mint)]
+    to_nft_account: Account<'info, TokenAccount>,
 
     token_program: Program<'info, Token>,
 
@@ -300,6 +427,38 @@ pub struct UnstakeNft<'info> {
     pool_owner: AccountInfo<'info>,
 
     system_program: Program<'info, System>,
+
+    nft_mint: Account<'info, Mint>,
+
+    #[account(mut, owner=mpl_token_metadata::ID)]
+    /// CHECK: Metadata Account
+    metadata: AccountInfo<'info>,
+
+    #[account(owner=mpl_token_metadata::ID)]
+    /// CHECK: Edition Account
+    edition: AccountInfo<'info>,
+
+    #[account(mut)]
+    /// CHECK: Token Record
+    owner_token_record: AccountInfo<'info>,
+
+    #[account(mut)]
+    /// CHECK: Token Record
+    destination_token_record: AccountInfo<'info>,
+
+    #[account(address=mpl_token_metadata::ID)]
+    metadata_program: AccountInfo<'info>,
+
+    /// CHECK: Sysvar_instructions
+    sysvar_rent: AccountInfo<'info>,
+
+    ata_program: Program<'info, AssociatedToken>,
+
+    /// CHECK: Authorization Rules Program
+    authorization_rules_program: AccountInfo<'info>,
+
+    /// CHECK: Authorization Rules PDA
+    authorization_rules: AccountInfo<'info>
 }
 
 #[derive(Accounts)]
@@ -324,7 +483,7 @@ pub struct StakeNft<'info> {
     #[account(mut)]
     pool: Account<'info, Pool>,
 
-    #[account(mut, has_one=pool, constraint=staking_data.is_staked==false)]
+    #[account(mut, has_one=pool, has_one=nft_mint, constraint=staking_data.is_staked==false)]
     staking_data: Account<'info, StakingData>,
 
     #[account(mut, constraint=nft_account.mint==staking_data.nft_mint
@@ -332,9 +491,47 @@ pub struct StakeNft<'info> {
             && nft_account.amount==1)]
     nft_account: Account<'info, TokenAccount>,
 
+    #[account(mut, constraint=to_nft_account.mint==staking_data.nft_mint
+            && to_nft_account.owner==pool.key())]
+    to_nft_account: Account<'info, TokenAccount>,
+
     token_program: Program<'info, Token>,
 
     clock: Sysvar<'info, Clock>,
+
+    nft_mint: Account<'info, Mint>,
+
+    #[account(mut, owner=mpl_token_metadata::ID)]
+    /// CHECK: Metadata Account
+    metadata: AccountInfo<'info>,
+
+    #[account(owner=mpl_token_metadata::ID)]
+    /// CHECK: Edition Account
+    edition: AccountInfo<'info>,
+
+    #[account(mut)]
+    /// CHECK: Token Record
+    owner_token_record: AccountInfo<'info>,
+
+    #[account(mut)]
+    /// CHECK: Token Record
+    destination_token_record: AccountInfo<'info>,
+
+    #[account(address=mpl_token_metadata::ID)]
+    metadata_program: AccountInfo<'info>,
+
+    system_program: Program<'info, System>,
+
+    /// CHECK: Sysvar_instructions
+    sysvar_rent: AccountInfo<'info>,
+
+    ata_program: Program<'info, AssociatedToken>,
+
+    /// CHECK: Authorization Rules Program
+    authorization_rules_program: AccountInfo<'info>,
+
+    /// CHECK: Authorization Rules PDA
+    authorization_rules: AccountInfo<'info>
 }
 
 #[derive(Accounts)]
